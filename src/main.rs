@@ -25,7 +25,7 @@ fn main() {
                 tcp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
-                tcp_client::connect(address).unwrap_or_else(|e| log::error!("{}", e))
+                tcp_client::connect(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             _ => {
                 missing_role();
@@ -33,7 +33,7 @@ fn main() {
         }
         "udp" => match role {
             "server" => {
-                // TODO: call tcp server
+                udp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
                 // TODO call tcp client
