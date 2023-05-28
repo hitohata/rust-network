@@ -11,6 +11,9 @@ name = "tcp-udp-server-client"
 [[bin]]
 name = "packet-capture"
 
+[[bin]]
+name = "port-scanner"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
