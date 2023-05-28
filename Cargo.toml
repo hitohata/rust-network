@@ -7,11 +7,9 @@ edition = "2021"
 
 [[bin]]
 name = "tcp-udp-server-client"
-src = "src/bin/tcp-udp-server-client/main.rs"
 
 [[bin]]
 name = "packet-capture"
-src = "src/bin/packet-capture/main.rs"
 
 [dependencies]
 log = "0.4"

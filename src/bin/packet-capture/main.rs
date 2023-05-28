@@ -52,7 +52,7 @@ fn main() {
                         ipv6_handler(&frame)
                     }
                     _ => {
-                        info!("Not an IPv4 or IPv8 packet")
+                        info!("Not an IPv4 or IPv6 packet")
                     }
                 }
             }
@@ -65,7 +65,7 @@ fn main() {
 }
 
 fn ipv4_handler(ethernet: &EthernetPacket) {
-    if let Some(packet) = Ipv4Packet::new(ethernet.packet()) {
+    if let Some(packet) = Ipv4Packet::new(ethernet.payload()) {
         match packet.get_next_level_protocol() {
             IpNextHeaderProtocols::Tcp => {
                 tcp_handler(&packet);
