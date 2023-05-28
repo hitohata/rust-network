@@ -22,7 +22,7 @@ fn main() {
     match protocol {
         "tcp" => match role {
             "server" => {
-                // TODO: call tcp server
+                tcp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
                 // TODO call tcp client
