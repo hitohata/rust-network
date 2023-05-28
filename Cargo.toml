@@ -9,7 +9,12 @@ edition = "2021"
 name = "tcp-udp-server-client"
 src = "src/bin/tcp-udp-server-client/main.rs"
 
+[[bin]]
+name = "packet-capture"
+src = "src/bin/packet-capture/main.rs"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
 failure = "0.1.5"
+pnet = "0.22.0"
