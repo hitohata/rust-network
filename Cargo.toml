@@ -5,6 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "tcp-udp-server-client"
+src = "src/bin/tcp-udp-server-client/main.rs"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
