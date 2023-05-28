@@ -1,4 +1,4 @@
-use std::{env, error};
+use std::env;
 use log;
 
 mod tcp_client;
@@ -25,7 +25,7 @@ fn main() {
                 tcp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
-                // TODO call tcp client
+                tcp_client::connect(address).unwrap_or_else(|e| log::error!("{}", e))
             }
             _ => {
                 missing_role();
