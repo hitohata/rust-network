@@ -1,6 +1,6 @@
 use std::{net::Ipv4Addr, env, fs, collections::HashMap};
 
-use pnet::{packet::{tcp::{TcpFlags, MutableTcpPacket, self}, ip::{IpNextHeaderProtocol, IpNextHeaderProtocols}}, transport};
+use pnet::{packet::{tcp::{TcpFlags, MutableTcpPacket, self}, ip::IpNextHeaderProtocols}, transport::{self, TransportReceiver}};
 
 const TCP_SIZE: usize = 20;
 const MAXIMUM_PORT_NUM: u16 = 1023;
@@ -68,7 +68,22 @@ fn main() {
         transport::TransportChannelType::Layer4(transport::TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp))
     )
     .expect("Failed to open channel.");
+
+    rayon::join(|| send_packet(&mut ts, &packet_info), 
+                || receive_packets(&mut tr, &packet_info)
+    );
 }
+
+fn send_packet(ts: &mut transport::TransportSender, packet_info: &PacketInfo) {
+    let mut packet = build_packet(packet_info);
+    for i in 1..MAXIMUM_PORT_NUM+1 {
+        let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet).unwrap();
+        reregister_destination_port(i, &mut tcp_header, packet_info);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        ts.send_to(tcp_header, std::net::IpAddr::V4(packet_info.target_ip_addr)).expect("failed to send");
+    }
+}
+
 
 fn build_packet(packet_info: &PacketInfo) -> [u8; TCP_SIZE] {
     let mut tcp_buffer = [0u8; TCP_SIZE];
@@ -100,4 +115,53 @@ fn reregister_destination_port(
     );
 
     tcp_header.set_checksum(checksum);
+}
+
+fn receive_packets(
+    tr: &mut TransportReceiver,
+    packet_info: &PacketInfo
+) -> Result<(), failure::Error> {
+    let mut replay_ports = Vec::new();
+    let mut packet_iter = transport::tcp_packet_iter(tr);
+
+    loop {
+        let tcp_packet = match packet_iter.next() {
+            Ok((tcp_packet, _)) => {
+                if tcp_packet.get_destination() == packet_info.my_port {
+                    tcp_packet
+                } else {
+                    continue;
+                }
+            }
+            Err(_) => continue,
+        };
+
+        let target_port = tcp_packet.get_source();
+        match packet_info.scan_type {
+            ScanType::Syn => {
+                if tcp_packet.get_flags() == TcpFlags::SYN | TcpFlags::ACK {
+                    println!("port {} is open", target_port);
+                }
+            }
+            ScanType::Fin | ScanType::Xmas | ScanType::Null => {
+                replay_ports.push(target_port);
+            }
+        }
+
+        if target_port != packet_info.maximum_port {
+            continue;
+        }
+
+        match packet_info.scan_type {
+            ScanType::Fin | ScanType::Xmas | ScanType::Null => {
+                for i in 1..=packet_info.maximum_port {
+                    if replay_ports.iter().find(|&&x| x == i).is_none() {
+                        println!("port {} is open", i);
+                    }
+                }
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
 }
