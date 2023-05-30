@@ -1,4 +1,4 @@
-use std::{env, error};
+use std::env;
 use log;
 
 mod tcp_client;
@@ -22,10 +22,10 @@ fn main() {
     match protocol {
         "tcp" => match role {
             "server" => {
-                // TODO: call tcp server
+                tcp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
-                // TODO call tcp client
+                tcp_client::connect(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             _ => {
                 missing_role();
@@ -33,10 +33,10 @@ fn main() {
         }
         "udp" => match role {
             "server" => {
-                // TODO: call tcp server
+                udp_server::serve(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             "client" => {
-                // TODO call tcp client
+                udp_client::communicate(address).unwrap_or_else(|e| log::error!("{}", e));
             }
             _ => {
                 missing_role();
