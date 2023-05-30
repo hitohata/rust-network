@@ -17,6 +17,9 @@ name = "port-scanner"
 [[bin]]
 name = "web-server"
 
+[[bin]]
+name = "dhcp-server"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
