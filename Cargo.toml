@@ -14,9 +14,14 @@ name = "packet-capture"
 [[bin]]
 name = "port-scanner"
 
+[[bin]]
+name = "web-server"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
 failure = "0.1.5"
 pnet = "0.33.0"
 rayon = "1.0"
+mio = "0.6.11"
+regex = "1"
