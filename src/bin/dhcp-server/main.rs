@@ -1,6 +1,6 @@
 use std::{env, net::{UdpSocket, Ipv4Addr}, sync::Arc, thread};
 
-use dhcp::DhcpPacket;
+use dhcp::{ DhcpPacket, DhcpServer };
 
 mod dhcp;
 

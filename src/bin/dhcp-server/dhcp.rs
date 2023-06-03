@@ -1,6 +1,7 @@
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, sync::{RwLock, Mutex}};
 
 use pnet::{util::MacAddr, packet::PrimitiveValues};
+use rusqlite::Connection;
 
 const OP: usize = 0;
 const HTYPE: usize = 1;
@@ -153,5 +154,39 @@ impl DhcpPacket {
             }
         }
         None
+    }
+}
+
+pub struct DhcpServer {
+    address_pool: RwLock<Vec<Ipv4Addr>>,
+    pub db_connection: Mutex<Connection>,
+    pub network_addr: Ipv4Addr,
+    pub server_address: Ipv4Addr,
+    pub default_gateway: Ipv4Addr,
+    pub subnet_mask: Ipv4Addr,
+    pub dbs_server: Ipv4Addr,
+    pub lease_time: Vec<u8>
+}
+
+impl DhcpServer {
+    pub fn pick_available_ip(&self) -> Option<Ipv4Addr> {
+        let mut lock = self.address_pool.write().unwrap();
+        lock.pop()
+    }
+
+    pub fn pick_specified_ip(&self, requested_ip: Ipv4Addr) -> Option<Ipv4Addr> {
+        let mut lock = self.address_pool.write().unwrap();
+        for i in 0..lock.len() {
+            if lock[i] == requested_ip {
+                return Some(lock.remove(i));
+            }
+        }
+
+        None
+    }
+
+    pub fn release_address(&self, released_ip: Ipv4Addr) {
+        let mut lock = self.address_pool.write().unwrap();
+        lock.insert(0, released_ip);
     }
 }
