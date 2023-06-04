@@ -1,5 +1,7 @@
-use std::{net::Ipv4Addr, sync::{RwLock, Mutex}};
+use std::{net::Ipv4Addr, sync::{RwLock, Mutex}, collections::HashMap};
 
+use ipnetwork::Ipv4Network;
+use log::info;
 use pnet::{util::MacAddr, packet::PrimitiveValues};
 use rusqlite::Connection;
 
@@ -160,7 +162,7 @@ impl DhcpPacket {
 pub struct DhcpServer {
     address_pool: RwLock<Vec<Ipv4Addr>>,
     pub db_connection: Mutex<Connection>,
-    pub network_addr: Ipv4Addr,
+    pub network_addr: Ipv4Network,
     pub server_address: Ipv4Addr,
     pub default_gateway: Ipv4Addr,
     pub subnet_mask: Ipv4Addr,
@@ -169,6 +171,44 @@ pub struct DhcpServer {
 }
 
 impl DhcpServer {
+
+    pub fn new() -> Result<DhcpServer, failure::Error> {
+
+        let env = util::load_env();
+
+        let static_address = util::obtail_static_address(&env)?;
+
+        let network_addr_with_prefix: Ipv4Network = Ipv4Network::new(
+            static_address["network_addr"],
+        ipnetwork::ipv4_mask_to_prefix(static_address["subnet_mask"])?,
+        )?;
+
+        let con = Connection::open("dhcp.db")?;
+
+        let addr_pool = Self::init_address_pool(&con, &static_address, network_addr_with_prefix)?;
+
+        info!(
+            "There are {} address in the address pool",
+            addr_pool.len()
+        );
+
+        let lease_time = util::make_big_endian_vec_from_u32(
+            env.get("LEASE_TIME").except("Missing lease_time").parse()?,
+        )?;
+
+        Ok(DhcpServer { 
+            address_pool: RwLock::new(addr_pool),
+            db_connection: Mutex::new(con),
+            network_addr: network_addr_with_prefix,
+            server_address: static_address["dhcp_server_addr"],
+            default_gateway: static_address["default_gateway"],
+            subnet_mask: static_address["subnet_mask"],
+            dbs_server: static_address["dns_addr"],
+            lease_time
+        })
+
+    }
+
     pub fn pick_available_ip(&self) -> Option<Ipv4Addr> {
         let mut lock = self.address_pool.write().unwrap();
         lock.pop()
@@ -188,5 +228,36 @@ impl DhcpServer {
     pub fn release_address(&self, released_ip: Ipv4Addr) {
         let mut lock = self.address_pool.write().unwrap();
         lock.insert(0, released_ip);
+    }
+
+    fn init_address_pool(
+        con: &Connection,
+        static_address: &HashMap<String, Ipv4Addr>,
+        network_addr_with_prefix: Ipv4Network
+    ) -> Result<Vec<Ipv4Addr>, failure::Error> {
+
+        let network_addr = static_address.get("network_addr").unwrap();
+        let default_gateway = static_address.get("default_gateway").unwrap();
+        let dhcp_server_addr = static_address.get("dhcp_server_addr").unwrap();
+        let dns_server_addr = static_address.get("dns_addr").unwrap();
+        let broadcast = network_addr_with_prefix.broadcast();
+
+        let mut used_ip_addrs = database::select_address(con, Some(0))?;
+
+        used_ip_addrs.push(*network_addr);
+        used_ip_addrs.push(*default_gateway);
+        used_ip_addrs.push(*dhcp_server_addr);
+        used_ip_addrs.push(*dns_server_addr);
+        used_ip_addrs.push(broadcast);
+
+        let mut addr_pool: Vec<Ipv4Addr> = network_addr_with_prefix
+            .iter()
+            .filter(|addr| !used_ip_addrs.contains(addr))
+            .collect();
+
+        addr_pool.reverse();
+
+        Ok(addr_pool)
+
     }
 }
