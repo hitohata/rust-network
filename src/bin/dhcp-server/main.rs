@@ -2,9 +2,12 @@ use std::{env, net::{UdpSocket, Ipv4Addr}, sync::Arc, thread};
 
 use byteorder::{BigEndian, ByteOrder};
 use dhcp::{ DhcpPacket, DhcpServer };
-use log::info;
+use log::{info, debug};
+use pnet::{util::MacAddr, packet::ip};
 
 mod dhcp;
+mod database;
+mod util;
 
 const HTYPE_ETHER: u8 = 1;
 
@@ -123,7 +126,7 @@ fn make_dhcp_packet(
         &mut cursor,
         Code::DNS as u8,
         4,
-        Some(&dhcp_packet.dns_server.octets())
+        Some(&dhcp_server.dns_server.octets())
     );
 
     dhcp_packet.set_option(&mut cursor, Code::END as u8, 0, None);
@@ -134,7 +137,7 @@ fn make_dhcp_packet(
 fn dhcp_handler(
     packet: &DhcpPacket,
     soc: &UdpSocket,
-    dhcp_server: &Arc<DhcpServer>,
+    dhcp_server: Arc<DhcpServer>,
 ) -> Result<(), failure::Error> {
     let message = packet
         .get_option(Code::MessageType as u8)
@@ -207,21 +210,215 @@ fn select_address(
 
     let con = dhcp_server.db_connection.lock().unwrap();
 
-    if Some(ip_from_used) = database:::select_entry(&con, received_packet.get_chaddr())? {
-        if dhcp_server.network_addr.contains(ip_from_used) && util::is_valid_ip(ip_from_used).is_ok() {
+    if let Some(ip_from_used) = database::select_entry(&con, received_packet.get_chaddr())? {
+        if dhcp_server.network_addr.contains(ip_from_used) && util::is_ipaddr_available(ip_from_used).is_ok() {
             return Ok(ip_from_used);
         }
     }
 
-    if let Some(ip_to_be_leased) = select_lease_ip(dhcp_server, &received_packet) {
+    if let Some(ip_to_be_leased) = obtain_available_ip_from_requested_option(dhcp_server, &received_packet) {
         return Ok(ip_to_be_leased);
     }
 
     while let Some(ip_addr) = dhcp_server.pick_available_ip() {
-        if util::is_valid_ip(ip_addr).is_ok() {
+        if util::is_ipaddr_available(ip_addr).is_ok() {
             return Ok(ip_addr);
         }
     }
 
     Err(failure::err_msg("Could not find an available IP address."))
+}
+
+fn select_lease_ip(
+    dhcp_server: &Arc<DhcpServer>,
+    received_packet: &DhcpPacket,
+) -> Result<Ipv4Addr, failure::Error> {
+    {
+        let con = dhcp_server.db_connection.lock().unwrap();
+        if let Some(ip_from_used) = database::select_entry(&con, received_packet.get_chaddr())? {
+            if dhcp_server.network_addr.contains(ip_from_used) && util::is_ipaddr_available(ip_from_used).is_ok()
+            {
+                return Ok(ip_from_used);
+            }
+        }
+
+        if let Some(ip_to_be_leased) =
+        obtain_available_ip_from_requested_option(dhcp_server, &received_packet)
+        {
+            return Ok(ip_to_be_leased);
+        }
+
+        while let Some(ip_addr) = dhcp_server.pick_available_ip() {
+            if util::is_ipaddr_available(ip_addr).is_ok() {
+                return Ok(ip_addr);
+            }
+        }
+
+        Err(failure::err_msg("Could not obtain available ip address."))
+    }
+}
+
+fn obtain_available_ip_from_requested_option(
+    dhcp_server: &Arc<DhcpServer>,
+    received_packet: &DhcpPacket,
+) -> Option<Ipv4Addr> {
+    let ip = received_packet.get_option(Code::RequestedIpAddress as u8)?;
+    let requested_ip = util::u8_to_ipv4addr(&ip)?;
+    let ip_form_pool = dhcp_server.pick_specified_ip(requested_ip)?;
+
+    if util::is_ipaddr_available(ip_form_pool).is_ok() {
+        return Some(requested_ip)
+    }
+    None
+}
+
+fn dhcp_request_message_handler_responded_to_offer(
+    xid: u32,
+    dhcp_server: Arc<DhcpServer>,
+    received_packet: &DhcpPacket,
+    client_macaddr: MacAddr,
+    soc: &UdpSocket,
+    server_id: Vec<u8>,
+) -> Result<(), failure::Error> {
+    info!("{:x}: received DHCPREQUEST with server_id", xid);
+
+    let server_ip = util::u8_to_ipv4addr(&server_id)
+        .ok_or_else(|| failure::err_msg("Failed to convert ip addr."))?;
+
+    if server_ip != dhcp_server.server_address {
+        info!("Client has chosen another dhcp server.");
+        return Ok(())
+    }
+
+    let ip_bin = received_packet
+        .get_option(Code::RequestedIpAddress as u8)
+        .unwrap();
+
+    let ip_to_be_leased = util::u8_to_ipv4addr(&ip_bin)
+        .ok_or_else(|| failure::err_msg("Failed to convert ip addr."))?;
+
+    let mut con = dhcp_server.db_connection.lock().unwrap();
+    let count = {
+        let tx = con.transaction()?;
+        let count = database::count_records_by_mac_addr(&tx, client_macaddr)?;
+        match count {
+            0 => database::insert_entry(&tx, client_macaddr, ip_to_be_leased)?,
+            _ => database::update_entry(&tx, client_macaddr, ip_to_be_leased, 0)?,
+        }
+
+        let dhcp_packet = make_dhcp_packet(
+                &received_packet, 
+                &dhcp_server, 
+                DHCPACK, 
+                ip_to_be_leased
+        )?;
+        util::send_dhcp_broadcast_response(soc,  dhcp_packet.get_buffer())?;
+
+        info!("{:x}: sent DHCPACK", xid);
+
+        tx.commit()?;
+        count
+
+    };
+
+    debug!("{:x}: leased address: {}", xid, ip_to_be_leased);
+
+    match count {
+        0 => debug!("{:x}: inserted into DB", xid),
+        _ => debug!("{:x}: update DB", xid)
+    }
+    Ok(())
+}
+
+fn dhcp_request_message_handler_to_reallocate(
+    xid: u32,
+    dhcp_server: Arc<DhcpServer>,
+    received_packet: &DhcpPacket,
+    client_macaddr: MacAddr,
+    soc: &UdpSocket,
+) -> Result<(), failure::Error> {
+    info!("{:x}: received DHCPREQUEST without server_id", xid);
+
+    if let Some(requested_ip) = received_packet.get_option(Code::RequestedIpAddress as u8) {
+        debug!("client is in INIT-REBOOT");
+
+        let requested_ip = util::u8_to_ipv4addr(&requested_ip)
+            .ok_or_else(|| failure::err_msg("Failed to convert ip addr."))?;
+
+        let con = dhcp_server.db_connection.lock().unwrap();
+
+        match database::select_entry(&con, client_macaddr)? {
+            Some(ip) => {
+                if ip == requested_ip && dhcp_server.network_addr.contains(ip) {
+
+                    let dhcp_packet = make_dhcp_packet(&received_packet, &dhcp_server, DHCPACK, ip)?;
+
+                    util::send_dhcp_broadcast_response(soc, dhcp_packet.get_buffer())?;
+
+                    info!("{:x}: sent DHCPACK", xid);
+
+                    Ok(())
+                } else {
+
+                    let dhcp_packet = make_dhcp_packet(
+                        &received_packet, 
+                        &dhcp_server, 
+                        DHCPNAK, 
+                        "0.0.0.0".parse()?,
+                    )?;
+
+                    util::send_dhcp_broadcast_response(soc, dhcp_packet.get_buffer())?;
+
+                    info!("{:x}: sent DHCPACK", xid);
+                    Ok(())
+                }
+            }
+            None => {
+                Ok(())
+            }
+        }
+    } else {
+
+        debug!("client is in RENEWING or REBINDING");
+
+        let ip_from_client = received_packet.get_ciaddr();
+
+        if !dhcp_server.network_addr.contains(ip_from_client) {
+            return Err(failure::err_msg(
+                "Invalid ciaddr. Mismatched network address.",
+            ));
+        }
+        let dhcp_packet = make_dhcp_packet(
+            &received_packet, 
+            &dhcp_server, 
+            DHCPACK, 
+            received_packet.get_ciaddr()
+        )?;
+        util::send_dhcp_broadcast_response(soc, dhcp_packet.get_buffer())?;
+
+        info!("{:x}: sent DHCPACK", xid);
+        Ok(())
+
+    }
+
+}
+
+fn dhcp_release_message_handler(
+    xid: u32,
+    dhcp_server: Arc<DhcpServer>,
+    received_packet: &DhcpPacket,
+    client_macaddr: MacAddr,
+) -> Result<(), failure::Error> {
+    info!("{:x}: received DHCPRELEASE", xid);
+
+    let mut con = dhcp_server.db_connection.lock().unwrap();
+    let tx = con.transaction()?;
+
+    database::select_entry(&tx, client_macaddr)?;
+    tx.commit()?;
+
+    debug!("{:x}: delete from DB", xid);
+
+    dhcp_server.release_address(received_packet.get_ciaddr());
+    Ok(())
 }

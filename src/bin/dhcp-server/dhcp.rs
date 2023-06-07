@@ -5,6 +5,8 @@ use log::info;
 use pnet::{util::MacAddr, packet::PrimitiveValues};
 use rusqlite::Connection;
 
+use crate::{util, database};
+
 const OP: usize = 0;
 const HTYPE: usize = 1;
 const HLEN: usize = 2;
@@ -166,7 +168,7 @@ pub struct DhcpServer {
     pub server_address: Ipv4Addr,
     pub default_gateway: Ipv4Addr,
     pub subnet_mask: Ipv4Addr,
-    pub dbs_server: Ipv4Addr,
+    pub dns_server: Ipv4Addr,
     pub lease_time: Vec<u8>
 }
 
@@ -176,7 +178,7 @@ impl DhcpServer {
 
         let env = util::load_env();
 
-        let static_address = util::obtail_static_address(&env)?;
+        let static_address = util::obtain_static_address(&env)?;
 
         let network_addr_with_prefix: Ipv4Network = Ipv4Network::new(
             static_address["network_addr"],
@@ -193,7 +195,7 @@ impl DhcpServer {
         );
 
         let lease_time = util::make_big_endian_vec_from_u32(
-            env.get("LEASE_TIME").except("Missing lease_time").parse()?,
+            env.get("LEASE_TIME").expect("Missing lease_time").parse()?,
         )?;
 
         Ok(DhcpServer { 
@@ -203,7 +205,7 @@ impl DhcpServer {
             server_address: static_address["dhcp_server_addr"],
             default_gateway: static_address["default_gateway"],
             subnet_mask: static_address["subnet_mask"],
-            dbs_server: static_address["dns_addr"],
+            dns_server: static_address["dns_addr"],
             lease_time
         })
 
