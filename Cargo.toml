@@ -17,6 +17,9 @@ name = "port-scanner"
 [[bin]]
 name = "web-server"
 
+[[bin]]
+name = "dhcp-server"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.6.1"
@@ -25,3 +28,6 @@ pnet = "0.33.0"
 rayon = "1.0"
 mio = "0.6.11"
 regex = "1"
+byteorder = "1"
+rusqlite = "0.18.0"
+ipnetwork = "0.14.0"
